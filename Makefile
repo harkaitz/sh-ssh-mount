@@ -3,7 +3,6 @@ PREFIX=/usr/local
 all:
 clean:
 install:
-
 ## -- install-sh --
 install: install-sh
 install-sh:
