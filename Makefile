@@ -8,6 +8,7 @@ install: install-sh
 install-sh:
 	@mkdir -p $(DESTDIR)$(PREFIX)/bin
 	@echo 'I bin/ssh-umount'; cp bin/ssh-umount  $(DESTDIR)$(PREFIX)/bin
+	@echo 'I bin/ssh-speed' ; cp bin/ssh-speed   $(DESTDIR)$(PREFIX)/bin
 	@echo 'I bin/ssh-mount' ; cp bin/ssh-mount   $(DESTDIR)$(PREFIX)/bin
 ## -- install-sh --
 ## -- license --

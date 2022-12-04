@@ -16,6 +16,12 @@ ssh-mount
     
     Mount remote SSH directory.
 
+ssh-speed
+
+    Usage: ssh-speed [USER@]HOST
+    
+    Tell the upload and download speed over SSH.
+
 ssh-umount
 
     Usage: ssh-umount DIR...
