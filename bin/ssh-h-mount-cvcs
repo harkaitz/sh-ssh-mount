@@ -1,0 +1,125 @@
+#!/bin/sh -e
+##:
+#h: Usage: ssh-h-mount-cvcs {-i | -mlu MACHINE }
+#h:
+#h: This program firsts installs the "sftp-cvcs" service that shares
+#h: the CVCS directory in "sftp:0.0.0.0:20023" publicly (-i).
+#h:
+#h: Then it starts the service and mounts it in remote "/CVCS" (-m).
+#h: Links are created (-l) in "/usr/src" etc.
+#h:
+#h: Finaly unmount with (-u).
+#h:
+#h: Environment variables: SSH_MOUNT_CVCS_LOCALDIR
+##:
+#M:env: SSH_MOUNT_CVCS_LOCALDIR
+##:
+ssh_h_mount_cvcs() {
+    local OPTIND SSH optopt ops=
+    
+    ## Parse command line arguments
+    while getopts "Vimlu" optopt; do
+        ops="${ops}${optopt}"
+        case $optopt in
+            V)  echo "SSH_MOUNT_CVCS_LOCALDIR : ${SSH_MOUNT_CVCS_LOCALDIR}"; return 0;;
+            \?) return 1;;
+        esac
+    done
+    shift $(( $OPTIND - 1 ))
+    
+    ## Operations.
+    case "${ops}" in *i*) ssh_h_mount_cvcs_install ;; esac
+    for SSH in "$@"; do
+        case "${ops}" in *m*) ssh_h_mount_mount  ;; esac
+        case "${ops}" in *l*) ssh_h_mount_link   ;; esac
+        case "${ops}" in *u*) ssh_h_mount_umount ;; esac
+    done
+}
+## -------------------------------------------------------------------
+ssh_h_mount_cvcs_install() {
+    if test ! -n "${SSH_MOUNT_CVCS_LOCALDIR}"; then
+        echo >&2 "error: Please set SSH_MOUNT_CVCS_LOCALDIR."
+        return 1
+    fi
+    if test -e /usr/bin/systemctl; then
+        systemd-h -a "sftp-cvcs" /usr/bin/ncat \
+        "-l -p 20023 -k -e \"/usr/lib/openssh/sftp-server -d ${SSH_MOUNT_CVCS_LOCALDIR}\""
+        sudo systemctl daemon-reload
+    fi
+}
+ssh_h_mount_mount() {
+    if test -e /usr/bin/systemctl; then
+        sudo systemctl start  "sftp-cvcs"
+        sudo systemctl status "sftp-cvcs"
+    fi
+    ssh2 "
+        if test -e /CVCS/linux; then
+            echo Already mounted.
+            exit 0
+        fi
+        ipaddr=\"\$(echo \"\${SSH_CLIENT}\" | sed 's| .*||')\"
+
+        if test \$(uname -s) = Linux; then
+            opts='-o dir_cache=no -o max_conns=10 -o auto_unmount'
+        else
+            opts=''
+        fi
+
+        \$sudo mkdir -p '/CVCS'
+        \$sudo sshfs \"\${ipaddr}\": '/CVCS' \
+            \$opts                 \
+            -o directport=20023    \
+            -o allow_other         \
+            -o reconnect           \
+            -o delay_connect       \
+            -o kernel_cache        \
+            -o uid=\"\$(id -u)\"   \
+            -o gid=\"\$(id -g)\"
+            
+    "
+}
+ssh_h_mount_umount() {
+    ssh2 '$sudo umount /CVCS || true'
+    if test -e /usr/bin/systemctl; then
+        sudo systemctl stop   "sftp-cvcs"
+        sudo systemctl status "sftp-cvcs"
+    fi
+}
+ssh_h_mount_link() {
+    ssh2 '
+        case "$(uname -s)" in
+            OpenBSD)
+                for n in src xenocara ports; do
+                    if test ! -h /usr/$n; then
+                        test ! -d /usr/$n || $sudo rmdir /usr/$n
+                        $sudo ln -s /CVCS/openbsd/usr/$n /usr/$n
+                    fi
+                done
+                ;;
+        esac
+    '
+}
+## -------------------------------------------------------------------
+ssh2() {
+    ssh "${SSH}" "
+        set -e
+        if test -w /etc/hosts; then
+            sudo=
+        elif which sudo >/dev/null 2>&1; then
+            sudo=sudo
+        elif which runas >/dev/null 2>&1; then
+            sudo=runas
+        else
+            echo >&2 'error: Execute this as root.'
+            exit 1
+        fi
+        $*
+    "
+}
+## -------------------------------------------------------------------
+if test @"${SCRNAME:-$(basename "$0")}" = @"ssh-h-mount-cvcs"; then
+    case "${1}" in
+        ''|-h|--help) sed -n 's/^ *#h: \{0,1\}//p' "$0";;
+        *)            ssh_h_mount_cvcs "$@"; exit 0;;
+    esac
+fi

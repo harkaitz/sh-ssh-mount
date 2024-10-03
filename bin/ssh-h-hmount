@@ -1,0 +1,145 @@
+#!/bin/sh -e
+##:
+#h: Usage: ssh-h-hmount [-W] MACHINE
+#h:
+#h: Install the necessary in a machine to mount "/h".
+#h:
+#h:   -k  Create private key for root in MACHINE and install in H machine.
+#h:   -i  Install sshfs and create "/h/NOT_MOUNTED" in MACHINE.
+#h:   -m  Mount "/h" if not already mounted in MACHINE.
+#h:   -u  Umount "/h" if mounted in MACHINE.
+#h:
+#h: Environment variables: SSH_HMOUNT_HOST_{LAN,WAN} SSH_HMOUNT_PATH
+##:
+#M:env: SSH_HMOUNT_HOST_WAN SSH_HMOUNT_HOST_LAN SSH_HMOUNT_PATH
+##:
+ssh_h_hmount() {
+    local OPTIND optopt SSH mode=lan ops=
+    
+    ## Parse command line arguments.
+    while getopts "Vkimu" optopt; do
+        ops="${ops}${optopt}"
+        case $optopt in
+            V)  ssh_h_hmount_show_variables; return 0;;
+            W)  mode=wan;;
+            \?) return 1;;
+        esac
+    done
+    shift $(( $OPTIND - 1 ))
+    
+    ## Select contact.
+    case "${mode}" in
+        lan) SSH_HMOUNT_HOST="${SSH_HMOUNT_HOST_LAN}";;
+        wan) SSH_HMOUNT_HOST="${SSH_HMOUNT_HOST_WAN}";;
+    esac
+    
+    ## Operations.
+    for SSH in "$@"; do
+        if test ! -n "${SSH_HMOUNT_HOST}"; then
+            echo >&2 "error: Please set SSH_HMOUNT_HOST_{LAN,WAN}."
+            return 1
+        fi
+        if test ! -n "${SSH_HMOUNT_PATH}"; then
+            echo >&2 "error: Please set SSH_HMOUNT_PATH."
+            return 1
+        fi
+        case "${ops}" in *k*) ssh_h_hmount_exchange_keys ;; esac
+        case "${ops}" in *i*) ssh_h_hmount_install_sshfs ;; esac
+        case "${ops}" in *m*) ssh_h_hmount_mount         ;; esac
+        case "${ops}" in *u*) ssh_h_hmount_umount        ;; esac
+    done
+}
+ssh_h_hmount_show_variables() {
+    cat <<-EOF
+	SSH_HMOUNT_HOST_LAN : ${SSH_HMOUNT_HOST_LAN}
+	SSH_HMOUNT_HOST_WAN : ${SSH_HMOUNT_HOST_WAN}
+	SSH_HMOUNT_PATH     : ${SSH_HMOUNT_PATH}
+	EOF
+}
+## -------------------------------------------------------------------
+ssh_h_hmount_exchange_keys() {
+    ssh2 '
+        if $sudo test ! -e /root/.ssh/id_rsa.pub && \
+           $sudo test ! -e /root/.ssh/id_ed25519.pub; then
+            $sudo ssh-keygen
+        fi
+        $sudo find /root/.ssh -name "id_*.pub" -exec cat "{}" ";" > .root_pubkeys
+    '
+    scp "${SSH}":.root_pubkeys "${SSH_HMOUNT_HOST}":.ssh/authorized_keys.tmp
+    ssh "${SSH_HMOUNT_HOST}" '
+        if test @"$(wc -l < ~/.ssh/authorized_keys.tmp)" = @"0"; then
+            echo >&2 "error: Empty authorized_keys."
+            exit 1
+        fi
+        echo "Appending to ~/.ssh/authorized_keys ..."
+        cat ~/.ssh/authorized_keys.tmp >> ~/.ssh/authorized_keys
+        rm -f ~/.ssh/authorized_keys.tmp
+    '
+    ssh2 "\$sudo ssh '${SSH_HMOUNT_HOST}' true"
+}
+ssh_h_hmount_install_sshfs() {
+    ssh2 '
+        $sudo mkdir -p /h/NOT_MOUNTED
+        case $(uname -s) in
+            OpenBSD) $sudo pkg_add sshfs-fuse; exit 0;;
+        esac
+    '
+}
+ssh_h_hmount_mount() {
+    ssh2 "
+        if test ! -e /h/NOT_MOUNTED; then
+            echo Already mounted.
+            exit 0
+        fi
+
+        if test \$(uname -s) = Linux; then
+            opts='-o dir_cache=no -o max_conns=10 -o auto_unmount'
+        else
+            opts=''
+        fi
+
+        \$sudo sshfs \
+            '${SSH_HMOUNT_HOST}':'${SSH_HMOUNT_PATH}' \
+            '/h' \$opts            \
+            -o allow_other         \
+            -o reconnect           \
+            -o delay_connect       \
+            -o kernel_cache        \
+            -o uid=\"\$(id -u)\"   \
+            -o gid=\"\$(id -g)\"
+            
+    "
+}
+ssh_h_hmount_umount() {
+    ssh2 "
+        \$sudo umount /h
+    "
+}
+## -------------------------------------------------------------------
+ssh2() {
+    local cmd="
+        set -e
+        if test -w /etc/hosts; then
+            sudo=
+        elif which sudo >/dev/null 2>&1; then
+            sudo=sudo
+        elif which runas >/dev/null 2>&1; then
+            sudo=runas
+        else
+            echo >&2 'error: Execute this as root.'
+            exit 1
+        fi
+        $*
+    "
+    case "${SSH}" in
+        localhost) eval "${cmd}";;
+        *)         ssh "${SSH}" "${cmd}";;
+    esac
+}
+## -------------------------------------------------------------------
+if test @"${SCRNAME:-$(basename "$0")}" = @"ssh-h-hmount"; then
+    case "${1}" in
+        ''|-h|--help) sed -n 's/^ *#h: \{0,1\}//p' "$0";;
+        *)            ssh_h_hmount "$@"; exit 0;;
+    esac
+fi
