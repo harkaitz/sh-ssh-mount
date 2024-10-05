@@ -24,4 +24,5 @@ install-sh:
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
 	cp bin/ssh-h-hmount $(DESTDIR)$(PREFIX)/bin
 	cp bin/ssh-h-mount-cvcs $(DESTDIR)$(PREFIX)/bin
+	cp bin/ssh-h-hmount-install $(DESTDIR)$(PREFIX)/bin
 ## -- BLOCK:sh --

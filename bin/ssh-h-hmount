@@ -1,15 +1,16 @@
 #!/bin/sh -e
 ##:
-#h: Usage: ssh-h-hmount [-W] MACHINE
+#h: Usage: ssh-h-hmount [-W] MACHINE|localhost
 #h:
 #h: Install the necessary in a machine to mount "/h".
 #h:
 #h:   -k  Create private key for root in MACHINE and install in H machine.
 #h:   -i  Install sshfs and create "/h/NOT_MOUNTED" in MACHINE.
-#h:   -m  Mount "/h" if not already mounted in MACHINE.
-#h:   -u  Umount "/h" if mounted in MACHINE.
+#h:   -m  Mount "/h|X:" if not already mounted in MACHINE.
+#h:   -u  Umount "/h|X:" if mounted in MACHINE.
 #h:
 #h: Environment variables: SSH_HMOUNT_HOST_{LAN,WAN} SSH_HMOUNT_PATH
+#h: Config files: [C:]/etc/hmount
 ##:
 #M:env: SSH_HMOUNT_HOST_WAN SSH_HMOUNT_HOST_LAN SSH_HMOUNT_PATH
 ##:
@@ -56,14 +57,52 @@ ssh_h_hmount_show_variables() {
 	SSH_HMOUNT_PATH     : ${SSH_HMOUNT_PATH}
 	EOF
 }
+ssh_h_hmount_calc_variables() {
+    case "$(uname -s)" in
+        Windows_NT) SSH_HMOUNT_CONFIG="C:/etc/hmount" ;;
+        *)          SSH_HMOUNT_CONFIG="/etc/hmount"   ;;
+    esac
+    if test -f "${SSH_HMOUNT_CONFIG}"; then
+        . "${SSH_HMOUNT_CONFIG}"
+    fi
+}
 ## -------------------------------------------------------------------
 ssh_h_hmount_exchange_keys() {
     ssh2 '
-        if $sudo test ! -e /root/.ssh/id_rsa.pub && \
-           $sudo test ! -e /root/.ssh/id_ed25519.pub; then
+        ## Create keys for the admin user.
+        if ${sudo} test ! -e ${admin_home}/.ssh/id_rsa.pub && \
+           ${sudo} test ! -e ${admin_home}/.ssh/id_ed25519.pub; then
+            echo "Generating private key for admin user ..."
             $sudo ssh-keygen
         fi
-        $sudo find /root/.ssh -name "id_*.pub" -exec cat "{}" ";" > .root_pubkeys
+        if ${sudo} test -e ${admin_home}/.ssh/id_rsa; then
+            pubkey=${admin_home}/.ssh/id_rsa.pub
+            prikey=${admin_home}/.ssh/id_rsa
+        elif $sudo test -e ${admin_home}/.ssh/id_ed25519; then
+            pubkey=${admin_home}/.ssh/id_ed25519.pub
+            prikey=${admin_home}/.ssh/id_ed25519
+        else
+            echo >&2 "ssh-h-hmount: error: Cannot find the private/public keys."
+            exit 1
+        fi
+        
+        ## Configure SSHFS in Windows.
+        if test $(uname -s) = Windows_NT; then
+            if test ! -e "C:/Program Files/SSHFS-Win"; then
+                echo "ssh-h-hmount: error: Please install SSHFS."
+                exit 1
+            fi
+            echo "Creating C:/Program Files/SSHFS-Win/etc/ssh_config ..."
+            cat > "C:/Program Files/SSHFS-Win/etc/ssh_config" <<-EOF
+		Host *
+		         IdentityFile ${prikey}
+		EOF
+            echo "Changing permissions to ${prikey} ..."
+            icacls ${prikey} /inheritance:r
+            icacls ${prikey} /grant:r "${USERNAME}:(R,W)"
+        fi
+        
+        ${sudo} cat ${pubkey} > .root_pubkeys
     '
     scp "${SSH}":.root_pubkeys "${SSH_HMOUNT_HOST}":.ssh/authorized_keys.tmp
     ssh "${SSH_HMOUNT_HOST}" '
@@ -75,19 +114,32 @@ ssh_h_hmount_exchange_keys() {
         cat ~/.ssh/authorized_keys.tmp >> ~/.ssh/authorized_keys
         rm -f ~/.ssh/authorized_keys.tmp
     '
-    ssh2 "\$sudo ssh '${SSH_HMOUNT_HOST}' true"
+    ssh2 -t "\${sudo} ssh -t '${SSH_HMOUNT_HOST}' true"
 }
 ssh_h_hmount_install_sshfs() {
     ssh2 '
-        $sudo mkdir -p /h/NOT_MOUNTED
+        ${sudo} mkdir -p /h/NOT_MOUNTED
         case $(uname -s) in
-            OpenBSD) $sudo pkg_add sshfs-fuse; exit 0;;
+            OpenBSD)
+                ${sudo} pkg_add sshfs-fuse
+                exit 0
+                ;;
+            Linux)
+                if ${sudo} which apt-get >/dev/null 2>&1; then
+                    echo "Installing sshfs ..."
+                    ${sudo} apt-get -y install sshfs
+                fi
+                echo "Editing /etc/fuse.conf to add user_allow_other ..."
+                ${sudo} sed -i "s|^\\#user_allow_other|user_allow_other|" /etc/fuse.conf
+                exit 0
+                ;;
         esac
     '
 }
 ssh_h_hmount_mount() {
+    local net_use_2="$(echo "${SSH_HMOUNT_PATH}" | tr '\\' '/')"
     ssh2 "
-        if test ! -e /h/NOT_MOUNTED; then
+        if test ! -e \${hdir}/NOT_MOUNTED; then
             echo Already mounted.
             exit 0
         fi
@@ -98,25 +150,44 @@ ssh_h_hmount_mount() {
             opts=''
         fi
 
-        \$sudo sshfs \
-            '${SSH_HMOUNT_HOST}':'${SSH_HMOUNT_PATH}' \
-            '/h' \$opts            \
-            -o allow_other         \
-            -o reconnect           \
-            -o delay_connect       \
-            -o kernel_cache        \
-            -o uid=\"\$(id -u)\"   \
-            -o gid=\"\$(id -g)\"
+        case \$(uname -s) in
+            Linux|OpenBSD)
+                \${sudo} sshfs \
+                    '${SSH_HMOUNT_HOST}':'${SSH_HMOUNT_PATH}' \
+                    \"\${hdir}\"           \
+                    \${opts}               \
+                    -o allow_other         \
+                    -o reconnect           \
+                    -o delay_connect       \
+                    -o kernel_cache        \
+                    -o uid=\"\$(id -u)\"   \
+                    -o gid=\"\$(id -g)\"
+                ;;
+            Windows_NT)
+                net use \"\${hdir}\" '\\\\sshfs.kr\\${SSH_HMOUNT_HOST}${net_use_2}'
+                ;;
+            *)
+                echo >&2 'error: Unsupported platform.'
+                exit 1
+                ;;
+        esac
             
     "
 }
 ssh_h_hmount_umount() {
     ssh2 "
-        \$sudo umount /h
+        case \$(uname -s) in
+            Linux|OpenBSD) \$sudo umount \$hdir ;;
+            Windows_NT)    net use \$hdir /delete || true ;;
+            *)             echo >&2 'error: Unsupported platform.'; exit 1;;
+        esac
     "
 }
 ## -------------------------------------------------------------------
 ssh2() {
+    local opts=""
+    case "$1" in -*t*) opts="-t";; esac
+    case "$1" in -*)   shift;; esac
     local cmd="
         set -e
         if test -w /etc/hosts; then
@@ -129,17 +200,29 @@ ssh2() {
             echo >&2 'error: Execute this as root.'
             exit 1
         fi
+        case \$(uname -s) in
+            Linux|OpenBSD) hdir='/h'  admin_home=/root              cfg='/etc/hmount'   bin='/bin' ;;
+            Windows_NT)    hdir='X:'  admin_home=\"\$USERPROFILE\"  cfg='C:/etc/hmount' bin='C:/Windows/System32';;
+            *)             echo >&2 'error: Unsupported platform.'; exit 1;;
+        esac
         $*
     "
     case "${SSH}" in
         localhost) eval "${cmd}";;
-        *)         ssh "${SSH}" "${cmd}";;
+        *)         ssh ${opts} "${SSH}" "${cmd}";;
     esac
 }
 ## -------------------------------------------------------------------
+ssh_h_hmount_calc_variables
 if test @"${SCRNAME:-$(basename "$0")}" = @"ssh-h-hmount"; then
     case "${1}" in
         ''|-h|--help) sed -n 's/^ *#h: \{0,1\}//p' "$0";;
         *)            ssh_h_hmount "$@"; exit 0;;
+    esac
+elif test @"${SCRNAME:-$(basename "$0")}" = @"hmount2"; then
+    case "${1}" in
+        ''|-h|--help) echo "Usage: hmount2 { -m[W] | -u }";;
+        -*)           ssh_h_hmount "$1" localhost ;;
+        *)            echo >&2 "error: Invalid argument: $1"; exit 1;;
     esac
 fi

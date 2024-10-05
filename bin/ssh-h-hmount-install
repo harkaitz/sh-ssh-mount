@@ -1,0 +1,48 @@
+#!/bin/sh -e
+##:
+#h: Usage: ssh-h-hmount-install MACHINE|localhost
+#h:
+#h: Install the "hmount2" command in a machine so that it can mount
+#h: the "H" directory on it's own.
+##:
+. ssh-h-hmount
+ssh_h_hmount_install() {
+    local SSH scr org
+    for SSH in "$@"; do
+        if test ! -n "${SSH_HMOUNT_PATH}"; then
+            echo >&2 "error: Please set SSH_HMOUNT_PATH."
+            return 1
+        fi
+        scr="$(which ssh-h-hmount 2>/dev/null)"
+        if test ! -n "${scr}"; then
+            echo >&2 "error: Can't find ssh-h-hmount."
+            return 1
+        fi
+        org="$(sed -n 's|^\#ORIG:||p' "${scr}")"
+        scr="${org:-${scr}}"
+        ssh_h_hmount_install_sshfs
+        ssh2 '
+            echo "Creating $cfg ..."
+            mkdir -p "$(dirname "${cfg}")"
+            '"
+            \${sudo} tee \$cfg <<-EOF >/dev/null
+		SSH_HMOUNT_HOST_LAN='${SSH_HMOUNT_HOST_LAN}'
+		SSH_HMOUNT_HOST_WAN='${SSH_HMOUNT_HOST_WAN}'
+		SSH_HMOUNT_PATH='${SSH_HMOUNT_PATH}'
+		EOF
+            "'
+            echo "Creating ${bin}/hmount2 ..."
+            ${sudo} tee ${bin}/hmount2.tmp >/dev/null
+            ${sudo} chmod +x ${bin}/hmount2.tmp
+            ${sudo} mv ${bin}/hmount2.tmp ${bin}/hmount2
+        ' < "${scr}"
+    done
+}
+## -------------------------------------------------------------------
+if test @"${SCRNAME:-$(basename "$0")}" = @"ssh-h-hmount-install"; then
+    case "${1}" in
+        ''|-h|--help) sed -n 's/^ *#h: \{0,1\}//p' "$0";;
+        -*V*)         ssh_h_hmount_show_variables; exit 0;;
+        *)            ssh_h_hmount_install "$@"; exit 0;;
+    esac
+fi
