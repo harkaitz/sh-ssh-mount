@@ -139,11 +139,7 @@ ssh_h_hmount_install_sshfs() {
 ssh_h_hmount_mount() {
     local net_use_2="$(echo "${SSH_HMOUNT_PATH}" | tr '\\' '/')"
     ssh2 "
-        if test ! -e \${hdir}/NOT_MOUNTED; then
-            echo Already mounted.
-            exit 0
-        fi
-
+        
         if test \$(uname -s) = Linux; then
             opts='-o dir_cache=no -o max_conns=10 -o auto_unmount'
         else
@@ -152,6 +148,10 @@ ssh_h_hmount_mount() {
 
         case \$(uname -s) in
             Linux|OpenBSD)
+                if test ! -e \${hdir}/NOT_MOUNTED; then
+                    echo Already mounted.
+                    exit 0
+                fi
                 \${sudo} sshfs \
                     '${SSH_HMOUNT_HOST}':'${SSH_HMOUNT_PATH}' \
                     \"\${hdir}\"           \
