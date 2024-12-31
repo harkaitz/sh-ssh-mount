@@ -9,6 +9,8 @@ ssh-h-hmount
     
     Install the necessary in a machine to mount "/h".
     
+      -V  Show configuration.
+      -W  Select WAN variables and not LAN variables.
       -k  Create private key for root in MACHINE and install in H machine.
       -i  Install sshfs and create "/h/NOT_MOUNTED" in MACHINE.
       -m  Mount "/h|X:" if not already mounted in MACHINE.
